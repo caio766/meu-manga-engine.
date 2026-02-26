@@ -1,0 +1,7 @@
+name = "proxy-bot-robo"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# Aqui você pode colocar suas chaves se não quiser no código
+
