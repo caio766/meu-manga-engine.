@@ -1,43 +1,42 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const targetUrl = url.searchParams.get('url');
 
-    if (!targetUrl) return new Response("Erro: URL ausente", { status: 400 });
-
-    const headers = new Headers();
-    // IP Brasileiro e User Agent de alta confiança
-    headers.set("X-Forwarded-For", "177.126.180.200"); 
-    headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
-    headers.set("Referer", "https://mangalivre.tv/");
+    // 1. Resposta para quando não há URL (ajuda a testar se o worker está vivo)
+    if (!targetUrl) {
+      return new Response("Proxy Ativo! Use ?url=https://www.google.com", {
+        headers: { "Content-Type": "text/plain; charset=utf-8" }
+      });
+    }
 
     try {
+      // 2. Configura a requisição para o site alvo
       const response = await fetch(targetUrl, {
         method: "GET",
-        headers: headers,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "*/*"
+        },
         redirect: "follow"
       });
 
-      // Se o site retornar erro, entregamos o erro para saber o que houve
-      if (!response.ok) {
-        return new Response(`Erro no site original: ${response.status}`, { status: response.status });
-      }
-
-      const content = await response.arrayBuffer();
-      const contentType = response.headers.get("Content-Type") || "text/html";
-
-      // Retorno Limpo: Sem injeção de CSS ou scripts que causem tela preta
-      return new Response(content, {
-        status: 200,
+      // 3. Pega o corpo da resposta (seja imagem ou texto)
+      const data = await response.arrayBuffer();
+      
+      // 4. Repassa a resposta com headers de permissão (CORS)
+      return new Response(data, {
+        status: response.status,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Content-Type": contentType,
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Content-Type": response.headers.get("Content-Type") || "text/html",
           "Cache-Control": "no-cache"
         }
       });
 
-    } catch (error) {
-      return new Response(`Erro fatal: ${error.message}`, { status: 500 });
+    } catch (e) {
+      return new Response("Erro ao buscar URL: " + e.message, { status: 500 });
     }
   }
 };
