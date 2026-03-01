@@ -7,11 +7,11 @@ export default {
       return new Response("Erro: Use ?url=https://mangalivre.tv/seu-manga", { status: 400 });
     }
 
-    // --- LEITURA DO KV ---
+    // 1. Busca o cookie atualizado do seu KV
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
     const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
 
-    // Cabeçalhos turbinados para evitar Lazy Loading e parecer um navegador real de alta resolução
+    // 2. Montagem dos cabeçalhos de elite
     const headers = new Headers({
       "User-Agent": MY_USER_AGENT,
       "Cookie": cookieFromKV || "",
@@ -24,41 +24,43 @@ export default {
       "Upgrade-Insecure-Requests": "1",
       "DNT": "1",
       "Sec-GPC": "1",
-      // --- ESTRATÉGIA DE ROLAGEM/CARREGAMENTO ---
-      "Viewport-Width": "1920", // Simula tela Full HD para o site "abrir" mais conteúdo
-      "Device-Memory": "8",     // Simula um dispositivo potente
+      "Viewport-Width": "1920",
+      "Device-Memory": "8",
       "Service-Worker-Navigation-Preload": "true"
     });
 
+    // --- ALTERAÇÃO CRUCIAL: LIMPEZA DE CABEÇALHOS ---
+    // Removemos rastros que a Cloudflare adiciona automaticamente e que denunciam o uso de Proxy/Worker
+    headers.delete("cf-connecting-ip");
+    headers.delete("x-forwarded-for");
+    headers.delete("x-real-ip");
+    headers.delete("cf-worker");
+
     try {
-      // Fazemos a requisição original
+      // Faz a requisição "limpa" para o site
       const response = await fetch(targetUrl, {
         method: 'GET',
         headers: headers,
         redirect: 'follow'
       });
 
-      // Se a Cloudflare barrar (403), tentamos avisar
+      // Se der 403, a Cloudflare detectou o IP do Datacenter do Worker
       if (response.status === 403) {
-        return new Response("❌ Bloqueio Cloudflare: Cookie expirado no KV ou IP do Worker marcado.", { 
+        return new Response("❌ Bloqueio Cloudflare (403): O IP deste Worker foi marcado ou o cookie expirou.", { 
           status: 403,
           headers: { "Access-Control-Allow-Origin": "*" }
         });
       }
 
-      // Pegamos o conteúdo original
-      let body = await response.text();
+      const body = await response.text();
 
-      // --- TRUQUE ADICIONAL PARA O CÓDIGO-FONTE ---
-      // Às vezes o site esconde capítulos em tags <noscript> ou scripts.
-      // O código abaixo garante que o HTML seja entregue como o servidor mandou.
-      
+      // Retorna o HTML com cabeçalhos que permitem que sua automação leia tudo
       return new Response(body, {
         status: response.status,
         headers: {
           "Content-Type": "text/html; charset=UTF-8",
           "Access-Control-Allow-Origin": "*",
-          "Cache-Control": "no-cache" // Evita que você veja dados antigos
+          "Cache-Control": "no-cache"
         }
       });
 
