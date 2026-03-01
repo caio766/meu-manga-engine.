@@ -10,44 +10,57 @@ export default {
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
     const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
 
-    // Detecta se é a chamada específica de capítulos
-    const isAjaxChapters = targetUrl.includes('admin-ajax.php') && targetUrl.includes('manga=');
+    // Verifica se estamos tentando puxar os capítulos
+    const isAjaxChapters = targetUrl.includes('admin-ajax.php');
 
     const headers = new Headers({
       "User-Agent": MY_USER_AGENT,
       "Cookie": cookieFromKV || "",
-      "Accept": isAjaxChapters ? "*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept": "*/*",
       "Accept-Language": "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3",
-      "Referer": "https://mangalivre.tv/",
-      "X-Requested-With": "XMLHttpRequest"
+      "Referer": "https://mangalivre.tv/", // Essencial para não dar erro
+      "X-Requested-With": "XMLHttpRequest",
+      "Origin": "https://mangalivre.tv"
     });
 
-    // Limpeza de rastros para não ser detectado como bot/proxy
+    // Limpeza rigorosa de cabeçalhos de identificação de Proxy
     headers.delete("cf-connecting-ip");
     headers.delete("x-forwarded-for");
     headers.delete("x-real-ip");
     headers.delete("cf-worker");
+    headers.delete("cf-ray");
 
     try {
       let fetchOptions = {
-        method: 'GET', // Padrão é GET para páginas normais
+        method: 'GET',
         headers: headers,
         redirect: 'follow'
       };
 
-      // SE for o link de capítulos, o Worker "muta" para POST automaticamente
       if (isAjaxChapters) {
-        const mangaUrl = new URL(targetUrl);
-        const mangaId = mangaUrl.searchParams.get('manga');
+        // Se você passou o ID do mangá na URL do proxy (ex: &manga=13551)
+        const mangaId = url.searchParams.get('manga'); 
         
         fetchOptions.method = 'POST';
         headers.set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        // Monta o corpo que o servidor espera
-        fetchOptions.body = `action=manga_get_chapters&manga=${mangaId}`;
+        
+        // O corpo EXATO que o WordPress/Mangalivre espera
+        fetchOptions.body = new URLSearchParams({
+          'action': 'manga_get_chapters',
+          'manga': mangaId || '13551' // Se não enviar na URL, usa o do teste
+        }).toString();
       }
 
       const response = await fetch(targetUrl, fetchOptions);
-      const body = await response.text();
+      let body = await response.text();
+
+      // Se o corpo vier vazio ou "0", pode ser que o cookie no KV expirou
+      if (isAjaxChapters && (body === "0" || body.trim() === "")) {
+        return new Response("⚠️ O servidor retornou '0'. Verifique se o cookie cf_clearance no KV está atualizado!", { 
+          status: 200, 
+          headers: { "Content-Type": "text/plain; charset=UTF-8", "Access-Control-Allow-Origin": "*" } 
+        });
+      }
 
       return new Response(body, {
         status: response.status,
@@ -62,3 +75,4 @@ export default {
     }
   }
 };
+  
