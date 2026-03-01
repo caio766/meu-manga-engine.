@@ -2,6 +2,10 @@ name = "proxy-bot-robo"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
-[vars]
-# Aqui você pode colocar suas chaves se não quiser no código
+# Esta é a parte que cria a conexão com o seu banco de dados
+[[kv_namespaces]]
+binding = "mangalivre_session"
+id = "02b132aaf8e349b7837c713d9bea544a"
 
+[vars]
+# Variáveis simples podem ficar aqui, mas o Cookie fica no KV para segurança
