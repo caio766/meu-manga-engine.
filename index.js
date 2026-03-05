@@ -7,10 +7,12 @@ export default {
 
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
     
+    // MANTIDO: Seu User Agent real
     const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
 
     const isImage = targetUrl.match(/\.(webp|jpg|jpeg|png|gif|avif)/i) || targetUrl.includes('storage');
 
+    // MANTIDO: Cabeçalhos originais de bypass
     const headers = new Headers({
       "User-Agent": MY_USER_AGENT,
       "Accept": isImage ? "image/avif,image/webp,*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -54,69 +56,66 @@ export default {
       let body = await response.text();
       const proxyBase = `${url.origin}/?url=`;
 
-      // Substitui URLs de imagens do storage para passarem pelo proxy
+      // MANTIDO: Sua troca de URLs das imagens
       body = body.replace(/(https?:\/\/aws\.r2d2storage\.com\/[^\s"']+)/gi, (match) => {
         return `${proxyBase}${encodeURIComponent(match)}`;
       });
 
-      // Injeta script de filtro apenas em HTML
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('text/html')) {
-        // Script melhorado com seletor correto
-        const filterScript = `
-<script>
-(function() {
-  console.log('🔍 Filtro de capítulo iniciado');
+      // --- INJEÇÃO DO FILTRO SNIPER ---
+      // Baseado nas imagens 12276 e 12277 (Console) e nos seus círculos vermelhos
+      const styleFilter = `
+        <style>
+          /* 1. Mata as Divs Teimosas do Console (Image 12277) */
+          .a11y-speak-region, #a11y-speak-assertive, #a11y-speak-polite {
+            display: none !important;
+          }
 
-  function aplicarFiltro() {
-    // Tenta encontrar o contêiner de imagens
-    const container = document.querySelector('.chapter-images') || document.querySelector('#manga-safe-wrapper');
-    if (!container) {
-      console.warn('⏳ Aguardando contêiner de imagens...');
-      return false;
-    }
-    console.log('✅ Contêiner encontrado, aplicando filtro');
+          /* 2. Mata o Topo: Capa, Título e Breadcrumb (Image 12187) */
+          .entry-header, .breadcrumb, .manga-setup, .header-manga, 
+          #manga-reading-nav-head, .profile-manga {
+            display: none !important;
+          }
 
-    // Clona o contêiner para não afetar o original
-    const novoConteudo = container.cloneNode(true);
+          /* 3. Mata o Rodapé: Discussão e Botões Extras (Image 12186) */
+          .manga-discussion, .comments-area, #disqus_thread, 
+          .nav-links, .site-footer, .breadcrumb-footer {
+            display: none !important;
+          }
 
-    // Remove todo o conteúdo do body e insere o contêiner clonado
-    document.body.innerHTML = '';
-    document.body.appendChild(novoConteudo);
+          /* 4. Limpeza Geral e Fundo Preto */
+          body, html {
+            background: #000 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow-x: hidden !important;
+          }
+          
+          header, footer, .sidebar, .ads, .ad-banner {
+            display: none !important;
+          }
 
-    // Adiciona estilo escuro e centralizado
-    const style = document.createElement('style');
-    style.textContent = \`
-      body { margin: 0; padding: 20px; background: #0a0a0a; display: flex; justify-content: center; }
-      .chapter-images, #manga-safe-wrapper { max-width: 800px; width: 100%; background: #1a1a1a; padding: 15px; border-radius: 10px; }
-      .chapter-images img, #manga-safe-wrapper img { display: block; max-width: 100%; height: auto; margin: 10px auto; border-radius: 5px; }
-    \`;
-    document.head.appendChild(style);
+          /* 5. Força a exibição apenas do container de imagens */
+          .reading-content, #manga-safe-wrapper {
+            display: block !important;
+            visibility: visible !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            background: #000 !important;
+          }
 
-    console.log('🎉 Filtro aplicado!');
-    return true;
-  }
+          /* 6. Ajusta a classe identificada no console: wp-manga-chapter-img */
+          .wp-manga-chapter-img, .img-responsive {
+            display: block !important;
+            width: 100% !important;
+            max-width: 800px !important; /* Tamanho ideal para leitura */
+            height: auto !important;
+            margin: 0 auto 10px auto !important;
+          }
+        </style>
+      `;
 
-  // Tenta aplicar imediatamente
-  if (!aplicarFiltro()) {
-    // Se não encontrou, observa mudanças no DOM
-    const observer = new MutationObserver(() => {
-      if (aplicarFiltro()) {
-        observer.disconnect();
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-})();
-</script>
-        `;
-        // Insere antes do fechamento </body> (case insensitive) ou anexa no final
-        if (/<\/body>/i.test(body)) {
-          body = body.replace(/(<\/body>)/i, filterScript + '$1');
-        } else {
-          body += filterScript;
-        }
-      }
+      // Insere o estilo antes do fim da tag head
+      body = body.replace('</head>', `${styleFilter}</head>`);
 
       return new Response(body, { status: response.status, headers: newHeaders });
 
@@ -125,3 +124,4 @@ export default {
     }
   }
 };
+
