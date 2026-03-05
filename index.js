@@ -3,37 +3,51 @@ export default {
     const url = new URL(request.url);
     const targetUrl = url.searchParams.get('url');
 
-    if (!targetUrl) return new Response("Erro: Use ?url=LINK", { status: 400 });
+    if (!targetUrl) return new Response("Proxy Ativo.", { status: 200 });
 
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
+    
+    // O SEU USER AGENT REAL
+    const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
 
-    // --- AQUI ESTÁ O SEGREDO ---
-    // Substitua o texto abaixo pelo que o console do seu celular mostrou
-    const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0"; 
+    const isImage = targetUrl.match(/\.(webp|jpg|jpeg|png|gif|avif)/i) || targetUrl.includes('storage');
 
-    const isImage = targetUrl.match(/\.(webp|jpg|jpeg|png|gif|avif)/i) || targetUrl.includes('r2d2storage.com');
-
+    // Cabeçalhos específicos que o Firefox 128 envia
     const headers = new Headers({
       "User-Agent": MY_USER_AGENT,
+      "Accept": isImage ? "image/avif,image/webp,*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3",
+      "Accept-Encoding": "gzip, deflate, br",
       "Referer": "https://mangalivre.tv/",
-      "Origin": "https://mangalivre.tv"
+      "Origin": "https://mangalivre.tv",
+      "DNT": "1", // Do Not Track (Comum no Firefox)
+      "Upgrade-Insecure-Requests": "1",
+      "Sec-Fetch-Dest": isImage ? "image" : "document",
+      "Sec-Fetch-Mode": isImage ? "no-cors" : "navigate",
+      "Sec-Fetch-Site": "cross-site",
+      "Connection": "keep-alive"
     });
 
-    if (cookieFromKV && !isImage) headers.set("Cookie", cookieFromKV);
+    if (cookieFromKV) {
+      headers.set("Cookie", cookieFromKV);
+    }
 
     try {
       const response = await fetch(targetUrl, { 
         method: request.method, 
         headers: headers,
-        body: request.method === 'POST' ? await request.clone().text() : undefined
+        redirect: "follow"
       });
+
+      // Se retornar 403 aqui, é porque a Cloudflare marcou o IP do Worker
+      if (response.status === 403) {
+        return new Response("Bloqueio Cloudflare (403): O IP deste Worker pode estar na lista negra ou o cookie expirou.", { status: 403 });
+      }
 
       let newHeaders = new Headers(response.headers);
       newHeaders.delete("X-Frame-Options");
       newHeaders.delete("Content-Security-Policy");
-      newHeaders.delete("Frame-Options");
       newHeaders.set("Access-Control-Allow-Origin", "*");
-      newHeaders.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
       if (isImage) {
         const buffer = await response.arrayBuffer();
@@ -50,7 +64,7 @@ export default {
       return new Response(body, { status: response.status, headers: newHeaders });
 
     } catch (e) {
-      return new Response("Erro no Worker: " + e.message, { status: 500 });
+      return new Response("Erro: " + e.message, { status: 500 });
     }
   }
 };
