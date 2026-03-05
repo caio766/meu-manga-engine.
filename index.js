@@ -57,9 +57,38 @@ export default {
       let body = await response.text();
       const proxyBase = `${url.origin}/?url=`;
 
+      // Substitui URLs de imagens do storage para passarem pelo proxy
       body = body.replace(/(https?:\/\/aws\.r2d2storage\.com\/[^\s"']+)/gi, (match) => {
         return `${proxyBase}${encodeURIComponent(match)}`;
       });
+
+      // Injeta script de filtro apenas em respostas HTML
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        const filterScript = `
+<script>
+(function() {
+  function filtrarPagina() {
+    const container = document.querySelector('.reading-content');
+    if (!container) return;
+    const novoConteudo = container.cloneNode(true);
+    document.body.innerHTML = '';
+    document.body.appendChild(novoConteudo);
+    const style = document.createElement('style');
+    style.textContent = 'body { margin: 0; padding: 20px; background: #000; display: flex; justify-content: center; } .reading-content { max-width: 800px; width: 100%; background: #111; padding: 10px; border-radius: 8px; } .reading-content img { display: block; max-width: 100%; height: auto; margin: 10px auto; border-radius: 4px; }';
+    document.head.appendChild(style);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', filtrarPagina);
+  } else {
+    filtrarPagina();
+  }
+})();
+</script>
+        `;
+        // Insere o script antes do fechamento </body>
+        body = body.replace('</body>', filterScript + '</body>');
+      }
 
       return new Response(body, { status: response.status, headers: newHeaders });
 
