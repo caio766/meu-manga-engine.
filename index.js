@@ -2,9 +2,24 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const targetUrl = url.searchParams.get('url');
+    const purge = url.searchParams.get('purge'); // Sistema de gerenciamento
 
     if (!targetUrl) return new Response("Proxy Ativo.", { status: 200 });
 
+    // --- CONFIGURAÇÃO DE CACHE ---
+    const cache = caches.default;
+    const cacheKey = new Request(url.toString(), request);
+    
+    // Se NÃO for um pedido de limpeza (purge), tenta buscar no cache primeiro
+    if (purge !== 'true') {
+      let cachedResponse = await cache.match(cacheKey);
+      if (cachedResponse) {
+        console.log("Servindo do Cache: " + targetUrl);
+        return cachedResponse;
+      }
+    }
+
+    // --- SE NÃO TIVER NO CACHE OU FOR PURGE, BUSCA NOVO ---
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
     const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
 
@@ -43,71 +58,67 @@ export default {
       newHeaders.delete("Content-Security-Policy");
       newHeaders.set("Access-Control-Allow-Origin", "*");
 
+      // --- ESTRATÉGIA DE 90 DIAS (7.776.000 segundos) ---
+      // O 'immutable' avisa o browser para nem perguntar se mudou.
+      newHeaders.set("Cache-Control", "public, s-maxage=7776000, max-age=7776000, immutable");
+
+      let finalResponse;
+
       if (isImage) {
         const buffer = await response.arrayBuffer();
-        return new Response(buffer, { status: response.status, headers: newHeaders });
+        finalResponse = new Response(buffer, { status: response.status, headers: newHeaders });
+      } else {
+        let body = await response.text();
+        const proxyBase = `${url.origin}/?url=`;
+
+        body = body.replace(/(https?:\/\/aws\.r2d2storage\.com\/[^\s"']+)/gi, (match) => {
+          return `${proxyBase}${encodeURIComponent(match)}`;
+        });
+
+        // --- SEU SCRIPT SNIPER (INTACTO) ---
+        const cleanScript = `
+          <script>
+            (function() {
+              const clearInterface = () => {
+                const mangaContainer = document.querySelector('.reading-content') || document.querySelector('#manga-safe-wrapper');
+                if (mangaContainer) {
+                  document.body.innerHTML = '';
+                  document.body.appendChild(mangaContainer);
+                  document.body.style.backgroundColor = 'black';
+                  document.body.style.margin = '0';
+                  mangaContainer.style.display = 'block';
+                  mangaContainer.style.margin = '0 auto';
+                  mangaContainer.style.maxWidth = '1000px';
+                  document.querySelectorAll('img').forEach(img => {
+                     img.style.display = 'block';
+                     img.style.width = '100%';
+                     img.style.marginBottom = '10px';
+                  });
+                }
+              };
+              window.addEventListener('load', clearInterface);
+              setTimeout(clearInterface, 500);
+              setTimeout(clearInterface, 2000);
+              setTimeout(clearInterface, 5000);
+            })();
+          </script>
+          <style>
+            body { background: black !important; }
+            header, footer, .sidebar, .manga-discussion, .nav-links { display: none !important; }
+          </style>
+        `;
+        body = body.replace('</head>', `${cleanScript}</head>`);
+        finalResponse = new Response(body, { status: response.status, headers: newHeaders });
       }
 
-      let body = await response.text();
-      const proxyBase = `${url.origin}/?url=`;
-
-      body = body.replace(/(https?:\/\/aws\.r2d2storage\.com\/[^\s"']+)/gi, (match) => {
-        return `${proxyBase}${encodeURIComponent(match)}`;
-      });
-
-      // --- INJEÇÃO DO SCRIPT SNIPER (MAIS FORTE QUE CSS) ---
-      const cleanScript = `
-        <script>
-          (function() {
-            const clearInterface = () => {
-              // Procura o container das imagens que identificamos (reading-content ou manga-safe-wrapper)
-              const mangaContainer = document.querySelector('.reading-content') || document.querySelector('#manga-safe-wrapper');
-              
-              if (mangaContainer) {
-                // Remove TUDO do corpo do site
-                document.body.innerHTML = '';
-                // Adiciona apenas as imagens de volta
-                document.body.appendChild(mangaContainer);
-                
-                // Aplica estilo básico para fundo preto e centralização
-                document.body.style.backgroundColor = 'black';
-                document.body.style.margin = '0';
-                mangaContainer.style.display = 'block';
-                mangaContainer.style.margin = '0 auto';
-                mangaContainer.style.maxWidth = '1000px';
-
-                // Ajusta as imagens para ficarem visíveis e grandes
-                document.querySelectorAll('img').forEach(img => {
-                   img.style.display = 'block';
-                   img.style.width = '100%';
-                   img.style.marginBottom = '10px';
-                });
-                
-                console.log('Limpeza Sniper Concluída');
-              }
-            };
-
-            // Executa a limpeza várias vezes para garantir que o site original não traga o lixo de volta
-            window.addEventListener('load', clearInterface);
-            setTimeout(clearInterface, 500);
-            setTimeout(clearInterface, 2000);
-            setTimeout(clearInterface, 5000);
-          })();
-        </script>
-        <style>
-          /* Esconde tudo inicialmente via CSS para evitar o "flash" do site original */
-          body { background: black !important; }
-          header, footer, .sidebar, .manga-discussion, .nav-links { display: none !important; }
-        </style>
-      `;
-
-      // Insere o script e o estilo no final do cabeçalho
-      body = body.replace('</head>', `${cleanScript}</head>`);
-
-      return new Response(body, { status: response.status, headers: newHeaders });
+      // Salva no cache da Cloudflare antes de entregar ao usuário
+      ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
+      
+      return finalResponse;
 
     } catch (e) {
       return new Response("Erro: " + e.message, { status: 500 });
     }
   }
 };
+      
