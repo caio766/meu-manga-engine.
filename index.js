@@ -4,33 +4,41 @@ export default {
     const targetUrl = url.searchParams.get('url');
     const purge = url.searchParams.get('purge');
 
-    if (!targetUrl) return new Response("Proxy Ativo.", { status: 200 });
-
-    const cache = caches.default;
-    const cacheKey = new Request(url.toString(), request);
-    
-    if (purge !== 'true') {
-      let cachedResponse = await cache.match(cacheKey);
-      if (cachedResponse) return cachedResponse;
+    if (!targetUrl) {
+      return new Response("Proxy Ativo - Use ?url=https://...", { status: 200 });
     }
 
+    // --- CACHE COM CHAVE SIMPLES (APENAS URL) ---
+    const cache = caches.default;
+    // Criar uma chave baseada APENAS na URL, sem headers
+    const cacheKey = new Request(url.toString(), {
+      method: 'GET',
+      headers: {} // Sem headers na chave!
+    });
+
+    // Tentar servir do cache (a menos que seja purge)
+    if (purge !== 'true') {
+      const cachedResponse = await cache.match(cacheKey);
+      if (cachedResponse) {
+        // Adicionar header de debug
+        const responseWithHeader = new Response(cachedResponse.body, cachedResponse);
+        responseWithHeader.headers.set('X-Cache-Status', 'HIT');
+        return responseWithHeader;
+      }
+    }
+
+    // --- BUSCAR DO ORIGEM ---
     const cookieFromKV = await env.mangalivre_session.get("mangalivre_cookie");
     const MY_USER_AGENT = "Mozilla/5.0 (Android 13; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0";
-
     const isImage = targetUrl.match(/\.(webp|jpg|jpeg|png|gif|avif)/i) || targetUrl.includes('storage');
 
-    // MANTIDO EXATAMENTE COMO O SEU ORIGINAL
     const headers = new Headers({
       "User-Agent": MY_USER_AGENT,
       "Accept": isImage ? "image/avif,image/webp,*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3",
       "Referer": "https://mangalivre.tv/",
       "Origin": "https://mangalivre.tv",
-      "DNT": "1",
-      "Upgrade-Insecure-Requests": "1",
-      "Sec-Fetch-Dest": isImage ? "image" : "document",
-      "Sec-Fetch-Mode": isImage ? "no-cors" : "navigate",
-      "Sec-Fetch-Site": "cross-site"
+      "DNT": "1"
     });
 
     if (cookieFromKV) {
@@ -39,44 +47,43 @@ export default {
 
     try {
       const response = await fetch(targetUrl, { 
-        method: request.method, 
+        method: 'GET', 
         headers: headers,
         redirect: "follow"
       });
 
-      if (response.status === 403) {
-        return new Response("Bloqueio Cloudflare (403)", { status: 403 });
+      if (!response.ok) {
+        return new Response(`Erro na origem: ${response.status}`, { status: response.status });
       }
 
-      // --- TRATAMENTO DA RESPOSTA (Onde a mágica do cache acontece) ---
-      let newHeaders = new Headers(response.headers);
-      
-      // Deletamos o que impede o cache de funcionar
-      newHeaders.delete("Set-Cookie"); 
-      newHeaders.delete("Pragma");
-      newHeaders.delete("Expires");
-      newHeaders.delete("X-Frame-Options");
-      newHeaders.delete("Content-Security-Policy");
-      
-      newHeaders.set("Access-Control-Allow-Origin", "*");
-      
-      // FORÇAR 90 DIAS (Isso mata o max-age=0 que você viu no console)
-      newHeaders.set("Cache-Control", "public, s-maxage=7776000, max-age=7776000, immutable");
-
+      // --- PROCESSAR RESPOSTA PARA CACHE ---
+      const proxyBase = `${url.origin}/?url=`;
       let finalResponse;
 
       if (isImage) {
+        // Para imagens: manter binário, headers limpos
         const buffer = await response.arrayBuffer();
-        finalResponse = new Response(buffer, { status: response.status, headers: newHeaders });
+        const newHeaders = new Headers({
+          'Content-Type': response.headers.get('Content-Type') || 'image/webp',
+          'Cache-Control': 'public, max-age=7776000, immutable',
+          'Access-Control-Allow-Origin': '*',
+          'X-Cache-Status': 'MISS'
+        });
+        
+        finalResponse = new Response(buffer, { 
+          status: response.status,
+          headers: newHeaders
+        });
       } else {
+        // Para HTML: reescrever URLs e adicionar script
         let body = await response.text();
-        const proxyBase = `${url.origin}/?url=`;
 
+        // Reescrever URLs das imagens
         body = body.replace(/(https?:\/\/aws\.r2d2storage\.com\/[^\s"']+)/gi, (match) => {
           return `${proxyBase}${encodeURIComponent(match)}`;
         });
 
-        // SEU SCRIPT SNIPER (INTACTO)
+        // Seu script sniper
         const cleanScript = `
           <script>
             (function() {
@@ -91,7 +98,9 @@ export default {
                   mangaContainer.style.margin = '0 auto';
                   mangaContainer.style.maxWidth = '1000px';
                   document.querySelectorAll('img').forEach(img => {
-                     img.style.display = 'block'; img.style.width = '100%'; img.style.marginBottom = '10px';
+                     img.style.display = 'block'; 
+                     img.style.width = '100%'; 
+                     img.style.marginBottom = '10px';
                   });
                 }
               };
@@ -102,22 +111,33 @@ export default {
             })();
           </script>
           <style>
-            body { background: black !important; }
+            body { background: black !important; margin:0 !important; }
             header, footer, .sidebar, .manga-discussion, .nav-links { display: none !important; }
           </style>
         `;
+        
         body = body.replace('</head>', `${cleanScript}</head>`);
-        finalResponse = new Response(body, { status: response.status, headers: newHeaders });
+        
+        const newHeaders = new Headers({
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=7776000, immutable',
+          'Access-Control-Allow-Origin': '*',
+          'X-Cache-Status': 'MISS'
+        });
+        
+        finalResponse = new Response(body, { 
+          status: response.status,
+          headers: newHeaders
+        });
       }
 
-      // Salva no estoque da Cloudflare
+      // --- ARMAZENAR NO CACHE (IMPORTANTE: CLONAR) ---
       ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
-      
+
       return finalResponse;
 
     } catch (e) {
-      return new Response("Erro: " + e.message, { status: 500 });
+      return new Response(`Erro: ${e.message}`, { status: 500 });
     }
   }
 };
-                                            
