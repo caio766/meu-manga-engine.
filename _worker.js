@@ -1,3 +1,4 @@
+// workers/image-proxy/src/index.js
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -69,6 +70,35 @@ export default {
       // Se for imagem, força o cache agressivo
       if (isImage) {
         newHeaders.set('Cache-Control', 'public, max-age=7776000, immutable');
+        
+        // ===== NOVA FUNÇÃO: SALVAR NO R2 =====
+        try {
+          const buffer = await response.clone().arrayBuffer();
+          const path = new URL(targetUrl).pathname;
+          const key = `images${path}`;
+          
+          // Usando sua API mestra (admin) para salvar
+          const adminResponse = await fetch('https://sua-api-mestra.com/storage/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${env.ADMIN_API_KEY}`
+            },
+            body: JSON.stringify({
+              bucket: 'capitulos-traduzidos',
+              key: key,
+              data: Array.from(new Uint8Array(buffer))
+            })
+          });
+          
+          if (adminResponse.ok) {
+            console.log(`✅ Imagem salva no R2: ${key}`);
+          } else {
+            console.error(`❌ Erro ao salvar no R2: ${await adminResponse.text()}`);
+          }
+        } catch (e) {
+          console.error(`❌ Erro no salvamento R2: ${e.message}`);
+        }
       }
 
       const finalResponse = new Response(response.body, {
@@ -84,4 +114,3 @@ export default {
     }
   }
 };
-
